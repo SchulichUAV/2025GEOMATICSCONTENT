@@ -1,3 +1,9 @@
+# converter script to convert a number of json files and their corresponding captures to a single txt named 
+# 'odm_geotags that can be used in odm
+# current status of odm: Odm can read the geotags file and each captures coordinates in the txt, but fails to locate its geoposition.
+# resulting in inaccurate mapping
+
+#start of code
 import json
 import os
 
