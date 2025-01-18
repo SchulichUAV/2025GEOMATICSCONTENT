@@ -1,0 +1,30 @@
+[
+	{
+		"width": 136.0,
+		"height": 630.0,
+		"capture_name": "capture0.jpg",
+		"x": 388.0,
+		"y": 320.0,
+		"confidence": 0.8580708503723145,
+		"class_id": 16,
+		"class": "tennis racket",
+		"detection_id": "1b24cc08-8849-4879-baaa-804881ea8efe",
+		"parent_id": "image",
+		"lat": 38.3145999,
+		"lon": -76.5452392
+	},
+	{
+		"width": 136.0,
+		"height": 630.0,
+		"capture_name": "capture0.jpg",
+		"x": 388.0,
+		"y": 320.0,
+		"confidence": 0.8580708503723145,
+		"class_id": 16,
+		"class": "tennis racket",
+		"detection_id": "1b24cc08-8849-4879-baaa-804881ea8efe",
+		"parent_id": "image",
+		"lat": 38.3145999,
+		"lon": -76.5452392
+	}
+]
