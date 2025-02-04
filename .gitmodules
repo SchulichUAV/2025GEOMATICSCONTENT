@@ -1,0 +1,3 @@
+[submodule "ODM"]
+	path = ODM
+	url = https://github.com/OpenDroneMap/ODM.git
