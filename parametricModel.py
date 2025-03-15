@@ -2,8 +2,120 @@
 import numpy as np
 import scipy.stats as stats
 import matplotlib.pyplot as plt
+from pyproj import CRS, Transformer
+import json
 
 #--------------------------------------------------Functions-----------------------------------------------------
+def lat_long_to_utm(lat, lon, MSL):
+    """
+    Convert geographic coordinates (latitude, longitude, and altitude) to UTM coordinates.
+    
+    Parameters:
+      lat (float): Latitude in decimal degrees.
+      lon (float): Longitude in decimal degrees.
+      MSL (float): Altitude (e.g., Mean Sea Level height, usually in meters).
+    
+    Returns:
+      (x, y, z): A three-element tuple where x is easting (meters), y is northing (meters),
+                 and z is the altitude (meters).
+    """
+    # Define the geographic coordinate system (WGS84)
+    wgs84 = CRS.from_epsg(4326)
+    
+    # Determine the UTM zone from the longitude
+    # UTM zones are 6° wide; zone calculation: zone = int((lon + 180)/6) + 1
+    zone = int((lon + 180) / 6) + 1
+    
+    # Determine the correct EPSG code for UTM based on hemisphere:
+    # - Northern Hemisphere: EPSG:326XX (where XX is the zone)
+    # - Southern Hemisphere: EPSG:327XX
+    if lat >= 0:
+        utm_epsg = 32600 + zone
+    else:
+        utm_epsg = 32700 + zone
+
+    # Define UTM coordinate system for the calculated zone
+    utm_crs = CRS.from_epsg(utm_epsg)
+    
+    # Create a Transformer from geographic coordinates (WGS84) to UTM
+    transformer = Transformer.from_crs(wgs84, utm_crs, always_xy=True)
+    
+    # Transform (lon, lat), while passing MSL as the vertical coordinate.
+    # Note: UTM is typically 2D but if you pass a third coordinate, it will usually apply an identity transformation on it.
+    x, y, z = transformer.transform(lon, lat, MSL)
+    
+    return x, y, z, zone
+
+
+from pyproj import CRS, Transformer
+
+def utm_to_lat_long(easting, northing, up, zone, northern=True):
+    """
+    Convert UTM coordinates (easting, northing, and up value) back to geographic coordinates (latitude and longitude).
+    
+    Parameters:
+      easting (float): Easting in meters.
+      northing (float): Northing in meters.
+      up (float): Vertical component (altitude), in meters.
+      zone (int): UTM zone number (1 through 60).
+      northern (bool): True if the coordinates are in the northern hemisphere; False for southern.
+    
+    Returns:
+      (lat, lon, altitude): A tuple containing latitude, longitude (in decimal degrees), and altitude (in meters).
+    """
+    # Select the appropriate EPSG code for the UTM CRS:
+    # For the northern hemisphere, the EPSG code is 32600 + zone,
+    # For the southern hemisphere, it’s 32700 + zone.
+    if northern:
+        utm_epsg = 32600 + zone
+    else:
+        utm_epsg = 32700 + zone
+
+    # Define the UTM coordinate system for the given zone.
+    utm_crs = CRS.from_epsg(utm_epsg)
+    
+    # Define WGS84 geographic coordinate system.
+    wgs84 = CRS.from_epsg(4326)
+    
+    # Create a Transformer to convert UTM coordinates back to WGS84.
+    # Note: Transformer with always_xy=True expects the input order to be (easting, northing),
+    # and returns coordinates in the order (lon, lat, altitude).
+    transformer = Transformer.from_crs(utm_crs, wgs84, always_xy=True)
+    
+    # Perform the transformation.
+    lon, lat, MSL = transformer.transform(easting, northing, up)
+    
+    return lat, lon, MSL
+
+
+def image_to_object_space(xDrone, yDrone, AGL, xPix, yPix, Yaw):
+    focalLength = 0.012
+
+    Scale = AGL / focalLength
+
+    pixelSpacing = 0.3528 # mm per pix
+
+    #mm
+    xFiducial = 256.838
+    yFiducial = -191.923
+
+    # image x and y in mm
+    Image = np.array([(xPix * pixelSpacing) - xFiducial, ((-yPix * pixelSpacing) - yFiducial)])
+
+    # object x and y in m relatvie to drone
+    Object = np.array([((Scale * Image[0]) / 1000), ((Scale * Image[1]) / 1000)])
+    
+    rotationYaw = np.array([
+        [np.cos(Yaw), -np.sin(Yaw)],
+        [np.sin(Yaw), np.cos(Yaw)]
+    ])
+
+    Target = rotationYaw @ Object.transpose()
+
+    xTarget = xDrone + Target[0]
+    yTarget = yDrone + Target[1]
+
+    return xTarget, yTarget
 
 
 
@@ -11,9 +123,9 @@ import matplotlib.pyplot as plt
 def model(xCoordsDrone, yCoordsDrone, xCoordsTarget, yCoordsTarget):
     xDelta = xCoordsDrone - xCoordsTarget
     yDelta = yCoordsDrone - yCoordsTarget
-    dObs = np.sqrt(xDelta**2 + yDelta**2)
+    Obs = np.sqrt(xDelta**2 + yDelta**2)
     
-    return dObs
+    return Obs
 
 
 # df/dxTarget
@@ -34,63 +146,71 @@ def fDyTarget(xCoordsDrone, yCoordsDrone, xCoordsTarget, yCoordsTarget):
     return fDyTarget
 
 
-# df/dxDrone
-def fDxDrone(xCoordsDrone, yCoordsDrone, xCoordsTarget, yCoordsTarget):
-    xDelta = xCoordsDrone - xCoordsTarget
-    yDelta = yCoordsDrone - yCoordsTarget
-    fDxDrone = xDelta / np.sqrt(xDelta**2 + yDelta**2)
-    
-    return fDxDrone
-
-
-# df/dyDrone
-def fDyDrone(xCoordsDrone, yCoordsDrone, xCoordsTarget, yCoordsTarget):
-    xDelta = xCoordsDrone - xCoordsTarget
-    yDelta = yCoordsDrone - yCoordsTarget
-    fDyDrone = yDelta / np.sqrt(xDelta**2 + yDelta**2)
-    
-    return fDyDrone
-
-
 # Load coordinates from file
-def load_coordinates(file_path):
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
-    xCoords = []
-    yCoords = []
-    zCoords = []
-    for line in lines:
-        values = line.split()
-        if len(values) == 3:
-            x, y, z = map(float, values)
-            xCoords.append(x)
-            yCoords.append(y)
-            zCoords.append(z)
-        else:
-            print(f"Skipping line: {line.strip()} (expected 3 values, got {len(values)})")
-    return np.array(xCoords), np.array(yCoords), np.array(zCoords)
-
-
-
-# Compute standard deviation of observations
-def compute_stDevObs(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget):
-    stDev = np.zeros(len(xCoordsDrone))
-
-    for i in range(len(stDev)):
-        stDev[i] = 1
+def parse_json_to_vectors(file_path):
+    with open(file_path, 'r') as f:
+        data = json.load(f)
     
-    return stDev
+    # Initialize vectors for each parameter type
+    x_pixel_vector = []
+    y_pixel_vector = []
+    last_time_vector = []
+    lat_vector = []
+    lon_vector = []
+    rel_alt_vector = []
+    alt_vector = []
+    roll_vector = []
+    pitch_vector = []
+    yaw_vector = []
+    dlat_vector = []
+    dlon_vector = []
+    dalt_vector = []
+    heading_vector = []
+
+    # Iterate through each data point and append values to respective vectors
+    for point in data:
+        x_pixel_vector.append(point["x_pixel"])
+        y_pixel_vector.append(point["y_pixel"])
+        last_time_vector.append(point["last_time"])
+        lat_vector.append(point["lat"])
+        lon_vector.append(point["lon"])
+        rel_alt_vector.append(point["rel_alt"])
+        alt_vector.append(point["alt"])
+        roll_vector.append(point["roll"])
+        pitch_vector.append(point["pitch"])
+        yaw_vector.append(point["yaw"])
+        dlat_vector.append(point["dlat"])
+        dlon_vector.append(point["dlon"])
+        dalt_vector.append(point["dalt"])
+        heading_vector.append(point["heading"])
+
+    return {
+        "x_pixel": x_pixel_vector,
+        "y_pixel": y_pixel_vector,
+        "last_time": last_time_vector,
+        "lat": lat_vector,
+        "lon": lon_vector,
+        "rel_alt": rel_alt_vector,
+        "alt": alt_vector,
+        "roll": roll_vector,
+        "pitch": pitch_vector,
+        "yaw": yaw_vector,
+        "dlat": dlat_vector,
+        "dlon": dlon_vector,
+        "dalt": dalt_vector,
+        "heading": heading_vector
+    }
 
 
 # Create covariance matrix of observations
-def covarianceMatrixObs(size, stDev):
+def covarianceMatrixObs(size):
     Cl = np.zeros((size, size))
-    np.fill_diagonal(Cl, stDev**2)
+    np.fill_diagonal(Cl, 1)
 
     return Cl
 
 
-def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget, zCoordsTarget):
+def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget):
     # Defining u(# of parameters) and n (# of observations)
     # Assuming number of observed horizontal distances is equal to n where a distance is calculating using the 2D vector equation (refer to function name 'model')
     u = 2
@@ -100,10 +220,9 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
     dof = n - u
 
     # Compute standard deviation of observations
-    stDev_array = compute_stDevObs(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget)
     
     # Create covariance matrix
-    Cl = covarianceMatrixObs(n, stDev_array)
+    Cl = covarianceMatrixObs(n)
 
     # Compute weight matrix P
     P = np.linalg.inv(Cl)
@@ -139,7 +258,7 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
             A[i, 0] = fDxTarget(xCoordsDrone[i], yCoordsDrone[i], xTargetEst, yTargetEst)
             A[i, 1] = fDyTarget(xCoordsDrone[i], yCoordsDrone[i], xTargetEst, yTargetEst)
 
-        # Populating misclosure vector w
+        # Populating misclosure vector w (w = f(xo) - l) convention
         for i in range(w.size):
             w[i] = (model(xCoordsDrone[i], yCoordsDrone[i], xTargetEst, yTargetEst) - model(xCoordsDrone[i], yCoordsDrone[i], xCoordsTarget[i], yCoordsTarget[i]))
 
@@ -160,7 +279,7 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
     aPosterioriVarianceFactor = ((vHat.transpose()) @ P @ vHat ) / dof
 
     # Recomputing Cl to properly scale weight matrix to perform data snooping
-    Cl = aPosterioriVarianceFactor * covarianceMatrixObs(n, stDev_array)
+    Cl = aPosterioriVarianceFactor * covarianceMatrixObs(n)
     
     # Compute weight matrix P
     P = np.linalg.inv(Cl)
@@ -219,27 +338,36 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
 
                 xCoordsTarget = np.delete(xCoordsTarget, i)
                 yCoordsTarget = np.delete(yCoordsTarget, i)
-                zCoordsTarget = np.delete(zCoordsTarget, i)
 
-        return parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget, zCoordsTarget)
+        return parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget)
     
     else:
         return xTargetEst, yTargetEst, zTargetEst
     
 
 #--------------------------------------------------Loading Data-----------------------------------------------------
-filePathDrone = "C:/Users/User/OneDrive - University of Calgary/SUAV/Model/data/ctrlPnts_2024.txt"
-xCoordsDrone, yCoordsDrone, zCoordsDrone = load_coordinates(filePathDrone)
+vectors = parse_json_to_vectors("C:/Users/mfles/OneDrive - University of Calgary/SUAV/Model/test_data_points_with_pixels.json")
 
-filePathTarget = "C:/Users/User/OneDrive - University of Calgary/SUAV/Model/data/TargetObservations.txt"
-xCoordsTarget, yCoordsTarget, zCoordsTarget = load_coordinates(filePathTarget)
+eastingDrone = []
+northingDrone = []
+verticalDrone = []
+zoneDrone = []
+for lat, lon, alt in zip(vectors['lat'], vectors['lon'], vectors['alt']):
+    easting, northing, vertical, zone = lat_long_to_utm(lat, lon, alt)
 
+    eastingDrone.append(easting)
+    northingDrone.append(northing)
+    verticalDrone.append(vertical)
+    zoneDrone.append(zone)
+
+eastingTarget = []
+northingTarget = []
+for eastingDroneTemp, northingDroneTemp, AGL, xPix, yPix, Yaw in zip(eastingDrone, northingDrone, vectors['rel_alt'], vectors['x_pixel'], vectors['y_pixel'], vectors['yaw']):
+    easting, northing = image_to_object_space(eastingDroneTemp, northingDroneTemp, AGL, xPix, yPix, Yaw)
+    eastingTarget.append(easting)
+    northingTarget.append(northing)
 
 #--------------------------------------------------Main-----------------------------------------------------
-xTargetEst, yTargetEst, zTargetEst = parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget, zCoordsTarget)
+xTargetEst, yTargetEst, zTargetEst = parametricAdjustment(np.array(eastingDrone), np.array(northingDrone), np.array(verticalDrone), np.array(eastingTarget), np.array(northingTarget))
 
 print(xTargetEst, yTargetEst, zTargetEst)
-
-
-
-
