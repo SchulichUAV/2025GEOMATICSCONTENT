@@ -6,7 +6,7 @@ from pyproj import CRS, Transformer
 import json
 
 #--------------------------------------------------Functions-----------------------------------------------------
-def lat_long_to_utm(lat, lon, MSL):
+def lat_long_to_utm(lat, lon):
     """
     Convert geographic coordinates (latitude, longitude, and altitude) to UTM coordinates.
     
@@ -16,7 +16,7 @@ def lat_long_to_utm(lat, lon, MSL):
       MSL (float): Altitude (e.g., Mean Sea Level height, usually in meters).
     
     Returns:
-      (x, y, z): A three-element tuple where x is easting (meters), y is northing (meters),
+      (easting, northing, z): A three-element tuple where easting is easting (meters), northing is northing (meters),
                  and z is the altitude (meters).
     """
     # Define the geographic coordinate system (WGS84)
@@ -42,21 +42,19 @@ def lat_long_to_utm(lat, lon, MSL):
     
     # Transform (lon, lat), while passing MSL as the vertical coordinate.
     # Note: UTM is typically 2D but if you pass a third coordinate, it will usually apply an identity transformation on it.
-    x, y, z = transformer.transform(lon, lat, MSL)
+    easting, northing = transformer.transform(lon, lat)
     
-    return x, y, z, zone
+    return easting, northing, zone
 
 
-from pyproj import CRS, Transformer
-
-def utm_to_lat_long(easting, northing, up, zone, northern=True):
+def utm_to_lat_long(easting, northing, zone, northern=True):
     """
-    Convert UTM coordinates (easting, northing, and up value) back to geographic coordinates (latitude and longitude).
+    Convert UTM coordinates (easting, northing, and vert value) back to geographic coordinates (latitude and longitude).
     
     Parameters:
       easting (float): Easting in meters.
       northing (float): Northing in meters.
-      up (float): Vertical component (altitude), in meters.
+      vert (float): Vertical component (altitude), in meters.
       zone (int): UTM zone number (1 through 60).
       northern (bool): True if the coordinates are in the northern hemisphere; False for southern.
     
@@ -83,64 +81,81 @@ def utm_to_lat_long(easting, northing, up, zone, northern=True):
     transformer = Transformer.from_crs(utm_crs, wgs84, always_xy=True)
     
     # Perform the transformation.
-    lon, lat, MSL = transformer.transform(easting, northing, up)
+    lon, lat = transformer.transform(easting, northing)
     
-    return lat, lon, MSL
+    return lat, lon
 
 
-def image_to_object_space(xDrone, yDrone, AGL, xPix, yPix, Yaw):
-    focalLength = 0.012
+# positive xPix must be parallel to direct of travel
+# positive yPix must be perpendicular to direct of travel
+def image_to_object_space(eastingDrone, northingDrone, AGL, xPix, yPix, Yaw, Pitch, Roll, xDirectTravel = True):
+    if xDirectTravel:
+        Yaw = np.deg2rad(270 - Yaw)
+    else:
+        Yaw = np.deg2rad(360 - Yaw)
+
+        
+    Pitch = np.deg2rad(Pitch)
+    Roll = np.deg2rad(Roll)
+
+    # meters (m)
+    focalLength = 0.006
 
     Scale = AGL / focalLength
 
-    pixelSpacing = 0.3528 # mm per pix
+    pixelSpacing = 0.00345 # mm per pix
 
-    #mm
-    xFiducial = 256.838
-    yFiducial = -191.923
 
-    # image x and y in mm
+    # fiducial centre (mm)
+    xFiducial = 2.5116
+    yFiducial = -1.8768
+
+    # image x and y (mm)
     Image = np.array([(xPix * pixelSpacing) - xFiducial, ((-yPix * pixelSpacing) - yFiducial)])
 
-    # object x and y in m relatvie to drone
+    print(Image)
+
+    # object x and y in m relative to drone
     Object = np.array([((Scale * Image[0]) / 1000), ((Scale * Image[1]) / 1000)])
     
-    rotationYaw = np.array([
-        [np.cos(Yaw), -np.sin(Yaw)],
-        [np.sin(Yaw), np.cos(Yaw)]
+
+    rotation = np.array([
+        [np.cos(Pitch) * np.cos(Yaw), (np.cos(Roll) * np.sin(Yaw)) + (np.sin(Roll) * np.sin(Pitch) * np.cos(Yaw))],
+        [-np.cos(Pitch) * np.sin(Yaw), (np.cos(Roll) * np.cos(Yaw)) - (np.sin(Roll) * np.sin(Pitch) * np.sin(Yaw))]
     ])
+    
 
-    Target = rotationYaw @ Object.transpose()
+    Target = rotation @ Object.transpose()
 
-    xTarget = xDrone + Target[0]
-    yTarget = yDrone + Target[1]
+    # x is direction of travel therefore the transformed x and y are actually switched in the final result to match the drone's coordinate system (x is east, y is north) compared to rotated image coordinate system (x is north, y is east)
+    eastingTarget = eastingDrone + Target[0]
+    northingTarget = northingDrone + Target[1]
 
-    return xTarget, yTarget
-
+    return eastingTarget, northingTarget
 
 
 # Functional parametric model
-def model(xCoordsDrone, yCoordsDrone, xCoordsTarget, yCoordsTarget):
-    xDelta = xCoordsDrone - xCoordsTarget
-    yDelta = yCoordsDrone - yCoordsTarget
+def model(eastingDrone, northingDrone, eastingTarget, northingTarget):
+    xDelta = eastingDrone - eastingTarget
+    yDelta = northingDrone - northingTarget
     Obs = np.sqrt(xDelta**2 + yDelta**2)
     
     return Obs
 
 
 # df/dxTarget
-def fDxTarget(xCoordsDrone, yCoordsDrone, xCoordsTarget, yCoordsTarget):
-    xDelta = xCoordsDrone - xCoordsTarget
-    yDelta = yCoordsDrone - yCoordsTarget
+def fDxTarget(eastingDrone, northingDrone, eastingTarget, northingTarget):
+    xDelta = eastingDrone - eastingTarget
+    yDelta = northingDrone - northingTarget
     fDxTarget = -xDelta / np.sqrt(xDelta**2 + yDelta**2)
     
     return fDxTarget
 
 
 # df/dyTarget
-def fDyTarget(xCoordsDrone, yCoordsDrone, xCoordsTarget, yCoordsTarget):
-    xDelta = xCoordsDrone - xCoordsTarget
-    yDelta = yCoordsDrone - yCoordsTarget
+def fDyTarget(eastingDrone, northingDrone, eastingTarget, northingTarget):
+    xDelta = eastingDrone - eastingTarget
+    yDelta = northingDrone - northingTarget
     fDyTarget = -yDelta / np.sqrt(xDelta**2 + yDelta**2)
     
     return fDyTarget
@@ -210,11 +225,11 @@ def covarianceMatrixObs(size):
     return Cl
 
 
-def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget):
+def parametricAdjustment(eastingDrone, northingDrone, AGLDrone, eastingTarget, northingTarget):
     # Defining u(# of parameters) and n (# of observations)
     # Assuming number of observed horizontal distances is equal to n where a distance is calculating using the 2D vector equation (refer to function name 'model')
     u = 2
-    n = xCoordsTarget.size
+    n = eastingTarget.size
 
     # Degrees of freedom
     dof = n - u
@@ -235,16 +250,16 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
     dHat = np.array([])
 
     # Estimating target coordinates by mean of target coordinate observations
-    xTargetEst = np.mean(xCoordsTarget)
-    yTargetEst = np.mean(yCoordsTarget)
     # Assuming flat plane of operation z-component will near 0m AGL
-    zTargetEst = 0
+    eastingTargetEst = np.mean(eastingTarget)
+    northingTargetEst = np.mean(northingTarget)
+    
 
     # Holds coordinate plot of mean target observations
-    plt.scatter(xTargetEst, yTargetEst, label = 'Mean Target Location')
+    plt.scatter(eastingTargetEst, northingTargetEst, label = 'Mean Target Location')
 
     # Outputs mean values
-    print("\nEstimated mean prior to adjustment: ", "Easting: ", xTargetEst, "Northing: ", yTargetEst, "AGL: ", zTargetEst)
+    print("\nEstimated mean prior to adjustment: ", "Easting: ", eastingTargetEst, "Northing: ", northingTargetEst)
 
     # Iteration count
     iteration = 0
@@ -255,20 +270,20 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
     while iteration == 0 or abs(np.max(dHat)) > threshold:
         # Populating design matrix A
         for i in range(A.shape[0]):
-            A[i, 0] = fDxTarget(xCoordsDrone[i], yCoordsDrone[i], xTargetEst, yTargetEst)
-            A[i, 1] = fDyTarget(xCoordsDrone[i], yCoordsDrone[i], xTargetEst, yTargetEst)
+            A[i, 0] = fDxTarget(eastingDrone[i], northingDrone[i], eastingTargetEst, northingTargetEst)
+            A[i, 1] = fDyTarget(eastingDrone[i], northingDrone[i], eastingTargetEst, northingTargetEst)
 
-        # Populating misclosure vector w (w = f(xo) - l) convention
+        # Populating misclosure vector w (w = l - f(xo)) convention
         for i in range(w.size):
-            w[i] = (model(xCoordsDrone[i], yCoordsDrone[i], xTargetEst, yTargetEst) - model(xCoordsDrone[i], yCoordsDrone[i], xCoordsTarget[i], yCoordsTarget[i]))
+            w[i] = (- model(eastingDrone[i], northingDrone[i], eastingTarget[i], northingTarget[i]) - model(eastingDrone[i], northingDrone[i], eastingTargetEst, northingTargetEst))
 
 
         N = (A.transpose()) @ P @ A
         U = (A.transpose()) @ P @ w
-        dHat = (-1 * np.linalg.inv(N)) @ U
+        dHat = (np.linalg.inv(N)) @ U
 
-        xTargetEst += dHat[0]
-        yTargetEst += dHat[1]
+        eastingTargetEst += dHat[0]
+        northingTargetEst += dHat[1]
         iteration += 1
 
 
@@ -299,16 +314,16 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
     CvHat = Cl - ClHat
     
     # Plot data and adjusted target point
-    print("\nEstimated post adjustment: ", "Easting: ", xTargetEst, "Northing: ", yTargetEst, "AGL: ", zTargetEst)
+    print("\nEstimated post adjustment: ", "Easting: ", eastingTargetEst, "Northing: ", northingTargetEst)
 
-    plt.scatter(xCoordsDrone, yCoordsDrone, label = 'Drone Observation Points')
-    plt.scatter(xCoordsTarget, yCoordsTarget, label = 'Target Observations')
-    plt.scatter(xTargetEst, yTargetEst, label = 'Adjust Target Point')
+    plt.scatter(eastingDrone, northingDrone, label = 'Drone Observation Points')
+    plt.scatter(eastingTarget, northingTarget, label = 'Target Observations')
+    plt.scatter(eastingTargetEst, northingTargetEst, label = 'Adjust Target Point')
   
-    for i, (x_val, y_val) in enumerate(zip(xCoordsDrone, yCoordsDrone)): 
+    for i, (x_val, y_val) in enumerate(zip(eastingDrone, northingDrone)): 
         plt.annotate(f'{i}', (x_val, y_val), textcoords="offset points", xytext=(0,10), ha='center')
 
-    for i, (x_val, y_val) in enumerate(zip(xCoordsTarget, yCoordsTarget)): 
+    for i, (x_val, y_val) in enumerate(zip(eastingTarget, northingTarget)): 
         plt.annotate(f'{i}', (x_val, y_val), textcoords="offset points", xytext=(0,10), ha='center')
 
     plt.title('Plot') 
@@ -332,17 +347,17 @@ def parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget
     if (np.max(standardizedVHat) > criticalValue) or (np.min(standardizedVHat) < -criticalValue):
         for i in range(standardizedVHat.size):
             if (standardizedVHat[i] > criticalValue) or (standardizedVHat[i] < -criticalValue):
-                xCoordsDrone = np.delete(xCoordsDrone, i)
-                yCoordsDrone = np.delete(yCoordsDrone, i)
-                zCoordsDrone = np.delete(zCoordsDrone, i)
+                eastingDrone = np.delete(eastingDrone, i)
+                northingDrone = np.delete(northingDrone, i)
+                AGLDrone = np.delete(AGLDrone, i)
 
-                xCoordsTarget = np.delete(xCoordsTarget, i)
-                yCoordsTarget = np.delete(yCoordsTarget, i)
+                eastingTarget = np.delete(eastingTarget, i)
+                northingTarget = np.delete(northingTarget, i)
 
-        return parametricAdjustment(xCoordsDrone, yCoordsDrone, zCoordsDrone, xCoordsTarget, yCoordsTarget)
+        return parametricAdjustment(eastingDrone, northingDrone, AGLDrone, eastingTarget, northingTarget)
     
     else:
-        return xTargetEst, yTargetEst, zTargetEst
+        return eastingTargetEst, northingTargetEst
     
 
 #--------------------------------------------------Loading Data-----------------------------------------------------
@@ -350,24 +365,24 @@ vectors = parse_json_to_vectors("C:/Users/mfles/OneDrive - University of Calgary
 
 eastingDrone = []
 northingDrone = []
-verticalDrone = []
 zoneDrone = []
-for lat, lon, alt in zip(vectors['lat'], vectors['lon'], vectors['alt']):
-    easting, northing, vertical, zone = lat_long_to_utm(lat, lon, alt)
+for lat, lon in zip(vectors['lat'], vectors['lon']):
+    easting, northing, zone = lat_long_to_utm(lat, lon)
 
     eastingDrone.append(easting)
     northingDrone.append(northing)
-    verticalDrone.append(vertical)
     zoneDrone.append(zone)
 
 eastingTarget = []
 northingTarget = []
-for eastingDroneTemp, northingDroneTemp, AGL, xPix, yPix, Yaw in zip(eastingDrone, northingDrone, vectors['rel_alt'], vectors['x_pixel'], vectors['y_pixel'], vectors['yaw']):
-    easting, northing = image_to_object_space(eastingDroneTemp, northingDroneTemp, AGL, xPix, yPix, Yaw)
+AGLDrone = []
+for eastingDroneTemp, northingDroneTemp, AGL, xPix, yPix, Yaw, Pitch, Roll in zip(eastingDrone, northingDrone, vectors['rel_alt'], vectors['x_pixel'], vectors['y_pixel'], vectors['yaw'], vectors['pitch'], vectors['roll']):
+    easting, northing = image_to_object_space(eastingDroneTemp, northingDroneTemp, AGL, xPix, yPix, Yaw, Pitch, Roll)
     eastingTarget.append(easting)
     northingTarget.append(northing)
+    AGLDrone.append(AGL)
 
 #--------------------------------------------------Main-----------------------------------------------------
-xTargetEst, yTargetEst, zTargetEst = parametricAdjustment(np.array(eastingDrone), np.array(northingDrone), np.array(verticalDrone), np.array(eastingTarget), np.array(northingTarget))
+eastingTargetEst, northingTargetEst = parametricAdjustment(np.array(eastingDrone), np.array(northingDrone), np.array(AGLDrone), np.array(eastingTarget), np.array(northingTarget))
 
-print(xTargetEst, yTargetEst, zTargetEst)
+print(eastingTargetEst, northingTargetEst)
