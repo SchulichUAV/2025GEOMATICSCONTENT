@@ -149,19 +149,20 @@ def parametricModel(file_path):
         Image = np.array([(xPix * pixelSpacing) - xFiducial, ((-yPix * pixelSpacing) - yFiducial)])
 
         # object x and y in m relative to drone
-        Object = np.array([((Scale * Image[0]) / 1000), ((Scale * Image[1]) / 1000), -AGL])
+        Object = np.array([((Scale * Image[0]) / 1000), ((Scale * Image[1]) / 1000), AGL])
         
-
+        # y is direction of travel therefore conventional roll and pitch rotations are swapped
+        # roll is rotation about y axis, pitch is rotation about x axis
         Rx = np.array([
             [1, 0, 0],
-            [0, np.cos(Pitch), -np.sin(Pitch)],
-            [0, np.sin(Pitch), np.cos(Pitch)]
+            [0, np.cos(Pitch), np.sin(Pitch)],
+            [0, -np.sin(Pitch), np.cos(Pitch)]
         ])
 
         Ry = np.array([
-            [np.cos(Roll), 0, np.sin(Roll)],
+            [np.cos(Roll), 0, -np.sin(Roll)],
             [0, 1, 0],
-            [-np.sin(Roll), 0, np.cos(Roll)]
+            [np.sin(Roll), 0, np.cos(Roll)]
         ])
 
         Rz = np.array([
@@ -170,14 +171,16 @@ def parametricModel(file_path):
             [0, 0, 1]
         ])
 
-        R = Ry @ Rx @ Rz
+        R = Rz @ Rx @ Ry
 
         # Target coordinates relative to drone position, not intersecting ground plane though
-        # Therefore must compute intersection coordinates with ground plane by scaliong by t
+        # Therefore must compute intersection coordinates with ground plane by scaling by t
         target = R @ Object.transpose()
+    
 
         verticalDepth = target[2]
-        t = -AGL / verticalDepth
+        
+        t = AGL / verticalDepth
 
         target[0] = target[0] * t
         target[1] = target[1] * t
