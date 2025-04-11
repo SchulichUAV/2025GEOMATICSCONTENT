@@ -1,29 +1,28 @@
-# Converter script to convert multiple JSON files and their corresponding captures to a single txt file named
-# 'odm_geotags.txt' for use in ODM
-# This version ensures correct file encoding (UTF-8 without BOM) and Unix-style line endings.
-
 import os
 import json
 import shutil
+from geopy.distance import geodesic
 
-# Directory containing the JSON files
-# Change with your folder path for json files
+# Directory paths
 json_directory = "/Users/hadyi/Documents/datasets/code/json_files"
-
-# Directory containing the images (ODM expects images in /datasets/images)
-# Change with your folder path for image files
-images_directory = "/Users/hadyi/Documents/datasets/code/images"
-
-# Output geotags file path within the 'code' directory
+source_images_directory = "/Users/hadyi/Documents/datasets/images"  # Unfiltered images (from source)
+filtered_images_directory = "/Users/hadyi/Documents/datasets/code/images"  # Filtered images go here
 output_file = "/Users/hadyi/Documents/datasets/code/odm_geotags.txt"
 
-# ODM's expected geotags file path inside the container (to copy later)
-odm_geotags_destination = "/datasets/code/odm_geotags.txt"
+# Distance threshold for filtering (in meters)
+DISTANCE_THRESHOLD = 1 
 
-# Initialize lines with the EPSG declaration
+# Ensure filtered images directory is clean
+if os.path.exists(filtered_images_directory):
+    shutil.rmtree(filtered_images_directory)
+os.makedirs(filtered_images_directory, exist_ok=True)
+
+# Initialize geotags file with EPSG declaration
 lines = ["EPSG:4326"]
+filtered_images = []
+used_coords = []
 
-# Process each JSON file in the directory
+# Process each JSON file
 for filename in os.listdir(json_directory):
     if filename.lower().endswith(".json"):
         filepath = os.path.join(json_directory, filename)
@@ -31,23 +30,24 @@ for filename in os.listdir(json_directory):
             with open(filepath, "r", encoding="utf-8") as json_file:
                 data = json.load(json_file)
 
-                # Extract fields from the JSON, with defaults
+                # Extract metadata
                 base_name = os.path.splitext(filename)[0]
                 possible_extensions = [".jpg", ".JPG", ".jpeg", ".JPEG"]
                 capture_name = None
 
-                # Find the corresponding image file with supported extensions
+                # Find corresponding image in the source images folder
                 for ext in possible_extensions:
                     temp_capture_name = base_name + ext
-                    image_path = os.path.join(images_directory, temp_capture_name)
+                    image_path = os.path.join(source_images_directory, temp_capture_name)
                     if os.path.isfile(image_path):
                         capture_name = temp_capture_name
                         break
 
                 if not capture_name:
-                    print(f"Warning: Image file for {filename} does not exist in {images_directory}. Skipping this entry.")
-                    continue  # Skip if image file doesn't exist
+                    print(f"⚠️ Warning: Image file for {filename} not found in {source_images_directory}. Skipping.")
+                    continue  
 
+                # Extract GPS data
                 lat = data.get("lat", 0.0)
                 lon = data.get("lon", 0.0)
                 alt = data.get("rel_alt", 0.0)
@@ -55,64 +55,68 @@ for filename in os.listdir(json_directory):
                 pitch = data.get("pitch", 0.0)
                 roll = data.get("roll", 0.0)
 
-                # Check for NaN or invalid values
-                if any([
-                    not isinstance(lat, (int, float)),
-                    not isinstance(lon, (int, float)),
-                    not isinstance(alt, (int, float)),
-                    not isinstance(yaw, (int, float)),
-                    not isinstance(pitch, (int, float)),
-                    not isinstance(roll, (int, float))
-                ]):
-                    print(f"Warning: Invalid geolocation data in file {filepath}. Skipping this entry.")
+                # Validate GPS
+                if any(not isinstance(v, (int, float)) for v in [lat, lon, alt, yaw, pitch, roll]):
+                    print(f"⚠️ Warning: Invalid geolocation data in {filename}. Skipping.")
                     continue
 
-                # Format line according to ODM requirements
-                line = f"{capture_name} {lat} {lon} {alt} {yaw} {pitch} {roll}"
-                lines.append(line)
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON from file {filepath}: {e}")
-        except Exception as e:
-            print(f"Unexpected error processing file {filepath}: {e}")
+                # Check if image is too close to another
+                keep = True
+                for coord in used_coords:
+                    if geodesic((lat, lon), coord).meters < DISTANCE_THRESHOLD:
+                        keep = False
+                        break
 
-# Write all lines to the output file (overwriting the old one)
+                if keep:
+                    used_coords.append((lat, lon))
+                    filtered_images.append(capture_name)
+                    line = f"{capture_name} {lat} {lon} {alt} {yaw} {pitch} {roll}"
+                    lines.append(line)
+
+                    src_image_path = os.path.join(source_images_directory, capture_name)
+                    dst_image_path = os.path.join(filtered_images_directory, capture_name)
+                    shutil.copy2(src_image_path, dst_image_path)
+                    print(f"Copied {capture_name} to {filtered_images_directory}")
+
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON from {filepath}: {e}")
+        except Exception as e:
+            print(f"Unexpected error processing {filepath}: {e}")
+
+# Ensure at least one image was copied
+if not os.listdir(filtered_images_directory):
+    print("No filtered images were copied. Check JSON and image paths!")
+else:
+    print(f"Filtered images successfully moved to {filtered_images_directory}")
+
+# Write the filtered geotags file
 try:
     with open(output_file, "w", encoding="utf-8", newline='\n') as output:
         output.write("\n".join(lines))
-    print(f"Geotags written successfully to {output_file}")
-except PermissionError:
-    print(f"Permission denied: Unable to write to {output_file}. Check file permissions.")
+    print(f"Filtered geotags written to {output_file}")
 except Exception as e:
-    print(f"An unexpected error occurred while writing to {output_file}: {e}")
+    print(f"Error writing {output_file}: {e}")
 
-# Validate the resulting geotags file
+# Validate odm_geotags.txt
 invalid_entries = []
 try:
     with open(output_file, "r", encoding="utf-8") as f:
         for line_number, line in enumerate(f, start=1):
             if line_number == 1:
-                # Optionally, verify that the first line is the correct EPSG declaration
-                if not line.strip().startswith("EPSG:"):
-                    invalid_entries.append((line_number, line.strip()))
-                continue  # Skip validation for the header line
+                continue #skip coordinate system line
 
-            if "NaN" in line:
-                invalid_entries.append((line_number, line.strip()))
-            # Check for the correct number of fields (7 fields expected)
-            fields = line.strip().split()
-            if len(fields) != 7:
+            if "NaN" in line or len(line.strip().split()) != 7:
                 invalid_entries.append((line_number, line.strip()))
 except FileNotFoundError:
-    print(f"The output file {output_file} does not exist for validation.")
+    print(f"File {output_file} does not exist for validation.")
 except Exception as e:
-    print(f"An unexpected error occurred during validation: {e}")
+    print(f"Unexpected error during validation: {e}")
 
-# Print results of the validation check
 if invalid_entries:
-    print("Invalid entries found in the geotags file:")
+    print("Invalid entries found in geotags file:")
     for line_number, entry in invalid_entries:
         print(f"Line {line_number}: {entry}")
 else:
-    print("No invalid entries found. Geotags file is ready for ODM.")
+    print("Geotags file is valid for ODM.")
 
-# **No longer copying the geotags file**, as we are placing it directly in the expected directory
+print("Processing complete. Filtered images exist in '/datasets/code/images/'")
