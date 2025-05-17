@@ -51,8 +51,7 @@ def parametricModel(file_path):
         MSL (float): Altitude (e.g., Mean Sea Level height, usually in meters).
         
         Returns:
-        (easting, northing, z): A three-element tuple where easting is easting (meters), northing is northing (meters),
-                    and z is the altitude (meters).
+        (easting, northing, zone): A three-element tuple, easting/northing (meters), zone (1-60).
         """
         # Define the geographic coordinate system (WGS84)
         wgs84 = CRS.from_epsg(4326)
