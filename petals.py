@@ -369,7 +369,8 @@ def parametric_model(file_path):
     #--------------------------------------------------Output-----------------------------------------------------
     return lat, lon
 
-lat, lon = parametric_model("C:/Users/mfles/OneDrive - University of Calgary/SUAV/Model/savedCoords.json")
+if "__name__" == "__main__":
+    lat, lon = parametric_model("C:/Users/mfles/OneDrive - University of Calgary/SUAV/Model/savedCoords.json")
 
-print("Adjusted Latitude: ", lat)
-print("Adjusted Longitude: ", lon)
+    print("Adjusted Latitude: ", lat)
+    print("Adjusted Longitude: ", lon)
