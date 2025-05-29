@@ -44,12 +44,12 @@ for filename in os.listdir(json_directory):
                         break
 
                 if not capture_name:
-                    print(f"⚠️ Warning: Image file for {filename} not found in {source_images_directory}. Skipping.")
+                    print(f"Warning: Image file for {filename} not found in {source_images_directory}. Skipping.")
                     continue  
 
                 # Extract GPS data
-                lat = data.get("lon", 0.0)
-                lon = data.get("lat", 0.0)
+                lat = data.get("lat", 0.0)
+                lon = data.get("lon", 0.0)
                 alt = data.get("rel_alt", 0.0)
                 yaw = data.get("yaw", 0.0)
                 pitch = data.get("pitch", 0.0)
@@ -57,7 +57,7 @@ for filename in os.listdir(json_directory):
 
                 # Validate GPS
                 if any(not isinstance(v, (int, float)) for v in [lat, lon, alt, yaw, pitch, roll]):
-                    print(f"⚠️ Warning: Invalid geolocation data in {filename}. Skipping.")
+                    print(f"Warning: Invalid geolocation data in {filename}. Skipping.")
                     continue
 
                 # Check if image is too close to another
