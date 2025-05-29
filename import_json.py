@@ -9,9 +9,9 @@ source_images_directory = "/Users/hadyi/Documents/datasets/images"  # Unfiltered
 filtered_images_directory = "/Users/hadyi/Documents/datasets/code/images"  # Filtered images go here
 output_file = "/Users/hadyi/Documents/datasets/code/odm_geotags.txt"
 
-# Distance threshold for filtering (in meters)
-DISTANCE_THRESHOLD = 1 
-
+# Distance threshold for filtering (in meters) (higher value will filter out LESS images, and vice versa for lower)
+DISTANCE_THRESHOLD = 6
+ 
 # Ensure filtered images directory is clean
 if os.path.exists(filtered_images_directory):
     shutil.rmtree(filtered_images_directory)
@@ -48,8 +48,8 @@ for filename in os.listdir(json_directory):
                     continue  
 
                 # Extract GPS data
-                lat = data.get("lat", 0.0)
-                lon = data.get("lon", 0.0)
+                lat = data.get("lon", 0.0)
+                lon = data.get("lat", 0.0)
                 alt = data.get("rel_alt", 0.0)
                 yaw = data.get("yaw", 0.0)
                 pitch = data.get("pitch", 0.0)
@@ -120,3 +120,4 @@ else:
     print("Geotags file is valid for ODM.")
 
 print("Processing complete. Filtered images exist in '/datasets/code/images/'")
+
